@@ -214,7 +214,7 @@ function convertTickTickData(tickTickData, withSignature = false) {
             }
           }
           
-          if (task["Due Date"]) {
+          if (task["Due Date"] && task["Start Date"]!=task["Due Date"]) {
             const dueDate = convertDateForOrg(task["Due Date"]);
             if (dueDate) {
               const recurrence = convertRecurrenceToOrg(task["Repeat"]);
