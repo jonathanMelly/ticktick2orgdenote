@@ -4,36 +4,35 @@
     "description": "Convert TickTick backup CSV files to Org-mode and Denote format",
     "main": "ticktick-to-org-denote.js",
     "bin": {
-        "ticktick-convert": "./ticktick-to-org-denote.js"
+      "ticktick-convert": "./ticktick-to-org-denote.js"
     },
     "scripts": {
-        "test": "echo \"Error: no test specified\" && exit 1",
-        "start": "node ticktick-to-org-denote.js",
-        "install-global": "npm install -g ."
+      "test": "echo \"Error: no test specified\" && exit 1",
+      "start": "node ticktick-to-org-denote.js",
+      "install-global": "pnpm install -g ."
     },
     "keywords": [
-        "ticktick",
-        "org-mode",
-        "denote",
-        "productivity",
-        "note-taking",
-        "converter"
+      "ticktick",
+      "org-mode",
+      "denote",
+      "productivity",
+      "note-taking",
+      "converter"
     ],
     "author": "Your Name",
     "license": "MIT",
     "dependencies": {
-        "papaparse": "^5.4.1"
+      "papaparse": "^5.4.1"
     },
     "engines": {
-        "node": ">=14.0.0"
+      "node": ">=14.0.0"
     },
     "repository": {
-        "type": "git",
-        "url": "https://github.com/yourusername/ticktick-to-org-denote.git"
+      "type": "git",
+      "url": "https://github.com/jonathanMelly/ticktick-to-org-denote.git"
     },
     "bugs": {
-        "url": "https://github.com/yourusername/ticktick-to-org-denote/issues"
+      "url": "https://github.com/jonathanMelly/ticktick-to-org-denote/issues"
     },
-    "homepage": "https://github.com/yourusername/ticktick-to-org-denote#readme",
-    "packageManager": "pnpm@10.6.5+sha512.cdf928fca20832cd59ec53826492b7dc25dc524d4370b6b4adbf65803d32efaa6c1c88147c0ae4e8d579a6c9eec715757b50d4fa35eea179d868eada4ed043af"
-}
+    "homepage": "https://github.com/jonathanMelly/ticktick-to-org-denote#readme"
+  }
