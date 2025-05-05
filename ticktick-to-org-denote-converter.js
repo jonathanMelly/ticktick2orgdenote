@@ -138,14 +138,47 @@ function convertTickTickData(tickTickData, withSignature = false) {
   let archiveContent = "";
   const denoteFiles = [];
   
-  // Separate notes and tasks
-  const notes = tickTickData.filter(task => task["Kind"] === "NOTE");
-  const allTasks = tickTickData.filter(task => task["Kind"] !== "NOTE");
+  // First, identify all checklist items 
+  const checklistIds = new Set();
+  tickTickData.forEach(item => {
+    // Item is part of a checklist if:
+    // 1. It has Kind: CHECKLIST
+    // 2. It has a parentId (is a child of another task)
+    // 3. It has children (other tasks have it as parentId)
+    if (item["Kind"] === "CHECKLIST" || 
+        item["parentId"] || 
+        tickTickData.some(child => child["parentId"] === item["taskId"])) {
+      checklistIds.add(item["taskId"]);
+      // Also add all its descendants
+      if (item["taskId"]) {
+        const descendants = findAllDescendants(tickTickData, item["taskId"]);
+        descendants.forEach(id => checklistIds.add(id));
+      }
+    }
+  });
   
-  // Further separate tasks by status
-  const todoTasks = allTasks.filter(task => task["Status"] === "0");
-  const doneTasks = allTasks.filter(task => task["Status"] === "1");
-  const archivedTasks = allTasks.filter(task => task["Status"] === "2");
+  // Function to find all descendants of a task
+  function findAllDescendants(data, taskId) {
+    const descendants = [];
+    const children = data.filter(item => item["parentId"] === taskId);
+    children.forEach(child => {
+      descendants.push(child["taskId"]);
+      descendants.push(...findAllDescendants(data, child["taskId"]));
+    });
+    return descendants;
+  }
+  
+  // Separate items by type
+  const notes = tickTickData.filter(task => task["Kind"] === "NOTE");
+  const checklistItems = tickTickData.filter(task => checklistIds.has(task["taskId"]));
+  const regularTasks = tickTickData.filter(task => 
+    task["Kind"] !== "NOTE" && !checklistIds.has(task["taskId"])
+  );
+  
+  // Further separate regular tasks by status
+  const todoTasks = regularTasks.filter(task => task["Status"] === "0");
+  const doneTasks = regularTasks.filter(task => task["Status"] === "1");
+  const archivedTasks = regularTasks.filter(task => task["Status"] === "2");
   
   // Active tasks include both TODO and DONE (but not archived)
   const activeTasks = [...todoTasks, ...doneTasks];
@@ -206,18 +239,18 @@ function convertTickTickData(tickTickData, withSignature = false) {
           content += "\n";
           
           // Add SCHEDULED and DEADLINE dates with recurrence
-          if (task["Start Date"]) {
-            const schedDate = convertDateForOrg(task["Start Date"]);
+          const schedDate = convertDateForOrg(task["Start Date"]);
+          const dueDate = convertDateForOrg(task["Due Date"]);
+          const recurrence = convertRecurrenceToOrg(task["Repeat"]);
+          
+          // If start and due dates are the same, only use SCHEDULED
+          if (schedDate && dueDate && schedDate === dueDate) {
+            content += `     SCHEDULED: <${schedDate}${recurrence ? ' ' + recurrence : ''}>\n`;
+          } else {
             if (schedDate) {
-              const recurrence = convertRecurrenceToOrg(task["Repeat"]);
               content += `     SCHEDULED: <${schedDate}${recurrence ? ' ' + recurrence : ''}>\n`;
             }
-          }
-          
-          if (task["Due Date"] && task["Start Date"]!=task["Due Date"]) {
-            const dueDate = convertDateForOrg(task["Due Date"]);
             if (dueDate) {
-              const recurrence = convertRecurrenceToOrg(task["Repeat"]);
               content += `     DEADLINE: <${dueDate}${recurrence ? ' ' + recurrence : ''}>\n`;
             }
           }
@@ -280,16 +313,140 @@ function convertTickTickData(tickTickData, withSignature = false) {
     return content;
   }
   
+  // Process checklists into Denote files (properly handle hierarchy)
+  const checklistsByParent = {};
+  
+  // First pass: identify all checklist parent items
+  const parentItems = checklistItems.filter(item => {
+    // It's a parent if it has children but no parent itself
+    const hasChildren = checklistItems.some(child => child["parentId"] === item["taskId"]);
+    const hasParent = item["parentId"] && item["parentId"] !== "";
+    return hasChildren && !hasParent;
+  });
+  
+  // Process each parent checklist
+  parentItems.forEach(parent => {
+    // Get all descendants of this parent
+    function getAllDescendants(parentId) {
+      const descendants = [];
+      checklistItems.forEach(item => {
+        if (item["parentId"] === parentId) {
+          descendants.push(item);
+          descendants.push(...getAllDescendants(item["taskId"]));
+        }
+      });
+      return descendants;
+    }
+    
+    const allChildren = getAllDescendants(parent["taskId"]);
+    const key = `${parent["Folder Name"]}|${parent["List Name"]}|${parent["Title"]}`;
+    
+    checklistsByParent[key] = {
+      parent: parent,
+      children: allChildren
+    };
+  });
+  
+  // Create Denote files for checklists
+  Object.entries(checklistsByParent).forEach(([key, { parent, children }]) => {
+    const title = parent["Title"] || "Untitled Checklist";
+    
+    // Combine tags from parent and only add checklist if not already present
+    const tags = parent["Tags"] ? parent["Tags"].split(',').map(tag => tag.trim()) : [];
+    if (!tags.includes('checklist')) {
+      tags.push('checklist');
+    }
+    
+    // Use creation date from parent or first child for Denote filename
+    const date = parent["Created Time"] || (children[0] && children[0]["Created Time"]);
+    const filename = createDenoteFilename(title, tags, date, withSignature);
+    
+    // Generate identifier based on date (same format as in filename)
+    const dateObj = new Date(date || Date.now());
+    const dateId = dateObj.toISOString().replace(/[-:]/g, '').split('.')[0].replace('T', 'T');
+    let identifier = dateId;
+    
+    if (withSignature) {
+      const signature = filename.match(/==([a-z0-9]+)--/)?.[1];
+      if (signature) identifier += `==${signature}`;
+    }
+    
+    let noteContent = `#+TITLE: ${title}\n`;
+    noteContent += `#+DATE: ${convertDateForOrg(date) || new Date().toISOString().slice(0, 16)}\n`;
+    noteContent += `#+FILETAGS: ${tags.map(tag => ':' + tag.replace(/\s+/g, '_')).join('')}\n`;
+    noteContent += `#+IDENTIFIER: ${identifier}\n\n`;
+    
+    // Add parent content if any
+    if (parent["Content"]) {
+      noteContent += `${parent["Content"]}\n\n`;
+    }
+    
+    // Function to render checklist hierarchy
+    function renderChecklistItem(item, indentLevel = 0) {
+      const indent = "  ".repeat(indentLevel);
+      const status = item["Status"] === "1" ? "X" : " ";
+      const itemText = item["Title"] || item["Content"] || "Unnamed item";
+      let itemString = `${indent}- [${status}] ${itemText}\n`;
+      
+      // Add item's content if different from title
+      if (item["Content"] && item["Content"] !== item["Title"]) {
+        itemString += `${indent}  ${item["Content"]}\n`;
+      }
+      
+      // Recursively add children
+      const immediateChildren = children.filter(child => child["parentId"] === item["taskId"]);
+      immediateChildren.forEach(child => {
+        itemString += renderChecklistItem(child, indentLevel + 1);
+      });
+      
+      return itemString;
+    }
+    
+    // Render all top-level children
+    const topLevelChildren = children.filter(child => child["parentId"] === parent["taskId"]);
+    topLevelChildren.forEach(child => {
+      noteContent += renderChecklistItem(child, 0);
+    });
+    
+    noteContent += "\n\n#+begin_comment\nSource: TickTick Checklist\n";
+    if (parent["Folder Name"]) noteContent += `Folder: ${parent["Folder Name"]}\n`;
+    if (parent["List Name"]) noteContent += `List: ${parent["List Name"]}\n`;
+    if (parent["Created Time"]) noteContent += `Created: ${parent["Created Time"]}\n`;
+    noteContent += "#+end_comment\n";
+    
+    denoteFiles.push({ 
+      filename, 
+      content: noteContent,
+      modifiedTime: date  // Store date to set filesystem timestamp
+    });
+  });
+  
+  // Debug: Log remaining items
+  const remainingItems = tickTickData.filter(item => 
+    !checklistIds.has(item["taskId"]) && item["taskId"] !== undefined
+  );
+  console.log(`Debug: ${remainingItems.length} items not captured as checklists`);
+  
   // Process notes as Denote files
   notes.forEach(note => {
     const title = note["Title"] || "Untitled Note";
     const tags = note["Tags"] ? note["Tags"].split(',').map(tag => tag.trim()) : [];
     const filename = createDenoteFilename(title, tags, note["Created Time"], withSignature);
     
+    // Generate identifier based on date (same format as in filename)
+    const dateObj = new Date(note["Created Time"] || Date.now());
+    const dateId = dateObj.toISOString().replace(/[-:]/g, '').split('.')[0].replace('T', 'T');
+    let identifier = dateId;
+    
+    if (withSignature) {
+      const signature = filename.match(/==([a-z0-9]+)--/)?.[1];
+      if (signature) identifier += `==${signature}`;
+    }
+    
     let noteContent = `#+TITLE: ${title}\n`;
     noteContent += `#+DATE: ${convertDateForOrg(note["Created Time"]) || new Date().toISOString().slice(0, 16)}\n`;
     noteContent += `#+FILETAGS: ${tags.map(tag => ':' + tag.replace(/\s+/g, '_')).join('')}\n`;
-    noteContent += `#+IDENTIFIER: ${Date.now().toString(36) + Math.random().toString(36).substr(2)}\n\n`;
+    noteContent += `#+IDENTIFIER: ${identifier}\n\n`;
     
     if (note["Content"]) {
       noteContent += note["Content"].replace(/\r/g, '');
@@ -301,7 +458,11 @@ function convertTickTickData(tickTickData, withSignature = false) {
     if (note["Created Time"]) noteContent += `Created: ${note["Created Time"]}\n`;
     noteContent += "#+end_comment\n";
     
-    denoteFiles.push({ filename, content: noteContent });
+    denoteFiles.push({ 
+      filename, 
+      content: noteContent,
+      modifiedTime: note["Created Time"]  // Store date to set filesystem timestamp
+    });
   });
   
   // Process active tasks
@@ -319,6 +480,9 @@ function convertTickTickData(tickTickData, withSignature = false) {
 console.log('TickTick to Org-mode and Denote Converter');
 console.log('=======================================');
 console.log(`Signature mode: ${withSignature ? 'ENABLED' : 'DISABLED'}`);
+console.log('- Notes go to Denote files');
+console.log('- Checklists (including Kind:CHECKLIST) go to Denote files with ":checklist:" tag');
+console.log('- When SCHEDULED and DEADLINE are identical, only SCHEDULED is used');
 
 // Read the TickTick CSV backup file
 fs.readFile(inputFile, 'utf8', (err, data) => {
@@ -378,12 +542,22 @@ fs.readFile(inputFile, 'utf8', (err, data) => {
       
       // Write denote files
       let denoteCount = 0;
-      denoteFiles.forEach(({ filename, content }) => {
+      denoteFiles.forEach(({ filename, content, modifiedTime }) => {
         const filePath = path.join(denoteDir, filename);
         fs.writeFile(filePath, content, 'utf8', (err) => {
           if (err) {
             console.error(`Error writing denote file ${filename}:`, err);
           } else {
+            // Set the file modification time to match the note date if available
+            if (modifiedTime) {
+              const time = new Date(modifiedTime).getTime() / 1000;  // Convert to seconds
+              fs.utimes(filePath, time, time, (err) => {
+                if (err) {
+                  console.error(`Error setting time for ${filename}:`, err);
+                }
+              });
+            }
+            
             denoteCount++;
             if (denoteCount === denoteFiles.length) {
               console.log(`Successfully created ${denoteCount} denote files`);
